@@ -11,7 +11,9 @@ use constant ICMP6_FILTER => 18; # FreeBSD, /usr/src/sys/netinet6/in6.h
 use constant MAX_NEIGHBOR_ADVERTISEMENT => 3; # RFC 4861
 use constant RETRANS_TIMER => 1; # seconds, FRC 4861
 
-my ($opt_tgt, $opt_dest, $opt_mac, $opt_delay, $opt_count, $opt_verbose, $opt_help);
+my ($opt_tgt, $opt_dest, $opt_mac, $opt_delay, $opt_count,
+	$opt_router, $opt_no_router, $opt_override, $opt_no_override,
+	$opt_verbose, $opt_help);
 $opt_dest = 'ff20::1'; # All nodes mcast group
 $opt_delay = RETRANS_TIMER;
 $opt_count = MAX_NEIGHBOR_ADVERTISEMENT;
@@ -22,20 +24,29 @@ usage: $0 [ OPTIONS ] ip6addr
 Sends ICMPv6 NA message(s) to given destination.
 
 valid options are:
- -d --to      destination IPv6 address (default: $opt_dest)
- -m --mac     send given MAC in target link-layer address option
- -c --count   number of retransmissions (infinite: 0; default: $opt_count)
- -d --delay   sleep N seconds between retransmissions
+ -d --to=ip6addr      destination IPv6 address (default: $opt_dest)
+ -m --mac=l2addr      send given MAC in target link-layer address option
+ -c --count=N         number of retransmissions (infinite: 0; default: $opt_count)
+ -d --delay=N         sleep N seconds between retransmissions
+ -r --router          set Router flag
+ -R  --norouter       unset Router flag (default)
+ -o --override        set Override flag (default)
+ -O  --nooverride     unset Override flag
  -v --verbose
  -h --help
 END
 }
 
+Getopt::Long::Configure ("no_ignore_case", "bundling");
 GetOptions (
 	"d|to:s" => \$opt_dest,
 	"m|mac:s" => \$opt_mac,
 	"c|count:i" => \$opt_count,
 	"d|delay:i" => \$opt_delay,
+	"r|router" => \$opt_router,
+	"R|norouter" => \$opt_no_router,
+	"o|override" => \$opt_override,
+	"O|nooverride" => \$opt_no_override,
 	"v|verbose" => \$opt_verbose,
 	"h|help" => \$opt_help,
 ) or die "Error in command line arguments";
@@ -56,6 +67,9 @@ if (@ARGV) {
 	exit 1;
 }
 
+my $R_flag = $opt_router && !$opt_no_router ? '1' : '0';
+my $O_flag = $opt_override || !$opt_no_override ? '1' : '0';
+
 my $target_address = inet_pton AF_INET6, $opt_tgt;
 defined $target_address or die "inet_pton(\"$opt_tgt\"): $!";
 my $src = pack_sockaddr_in6 0, $target_address;
@@ -68,7 +82,7 @@ my $packet = pack ('CCnB8CCCa16',
 	136, # type
 	0,   # code
 	0,   # checksum
-	'10100000', # flags (router=1, override=1)
+	"${R_flag}0${O_flag}00000", # flags
 	0, 0, 0, # reservation
 	$target_address
 );
@@ -94,6 +108,10 @@ while (!$opt_count || ++$i <= $opt_count) {
 	my $n_sent = send ICMP6, $packet, 0, $dst;
 	defined $n_sent or die "sendto: $!";
 	if ($opt_verbose) {
-		print "$opt_tgt > $opt_dest: ICMP6, neighbor advertisement, tgt is $opt_tgt, length $n_sent\n";
+		my $flags = '';
+		$flags .= 'R' if $R_flag;
+		$flags .= 'O' if $O_flag;
+		$flags = " ($flags)" if $flags ne '';
+		print "$opt_tgt > $opt_dest: ICMP6, neighbor advertisement$flags, tgt is $opt_tgt, length $n_sent\n";
 	}
 }
