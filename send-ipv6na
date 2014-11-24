@@ -27,7 +27,7 @@ valid options are:
  -d --to=ip6addr      destination IPv6 address (default: $opt_dest)
  -m --mac=l2addr      send given MAC in target link-layer address option
  -c --count=N         number of retransmissions (infinite: 0; default: $opt_count)
- -d --delay=N         sleep N seconds between retransmissions
+ -w --wait=N         sleep N seconds between retransmissions
  -r --router          set Router flag
  -R  --norouter       unset Router flag (default)
  -o --override        set Override flag (default)
@@ -42,7 +42,7 @@ GetOptions (
 	"d|to:s" => \$opt_dest,
 	"m|mac:s" => \$opt_mac,
 	"c|count:i" => \$opt_count,
-	"d|delay:i" => \$opt_delay,
+	"w|wait:i" => \$opt_delay,
 	"r|router" => \$opt_router,
 	"R|norouter" => \$opt_no_router,
 	"o|override" => \$opt_override,
