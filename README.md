@@ -14,6 +14,6 @@ valid options are:
  -d --to      destination IPv6 address (default: $opt_dest)
  -m --mac     send given MAC in target link-layer address option
  -c --count   number of retransmissions (infinite: 0; default: $opt_count)
- -d --delay   sleep N seconds between retransmissions
+ -w --wait   sleep N seconds between retransmissions
  -v --verbose
  -h --help
