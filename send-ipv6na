@@ -1,17 +1,20 @@
 #!/usr/bin/perl
 
-use Socket;
-use Socket6;
+use Socket qw (AF_INET6 SOCK_RAW SO_DONTROUTE SOL_SOCKET);
+# use Socket6 qw (inet_pton pack_sockaddr_in6); # these functions were rewritten in main::
 use Getopt::Long;
 use warnings;
 use strict;
 
+use constant IPPROTO_IPV6 => 41; # FreeBSD, /usr/src/sys/netinet/in.h
 use constant IPPROTO_ICMPV6 => 58; # FreeBSD, /usr/src/sys/netinet/in.h
 use constant ICMP6_FILTER => 18; # FreeBSD, /usr/src/sys/netinet6/in6.h
-use constant MAX_NEIGHBOR_ADVERTISEMENT => 3; # RFC 4861
-use constant RETRANS_TIMER => 1; # seconds, FRC 4861
+use constant IPV6_MULTICAST_IF => 9; # FreeBSD, /usr/src/sys/netinet6/in6.h
 
-my ($opt_tgt, $opt_dest, $opt_mac, $opt_delay, $opt_count,
+use constant MAX_NEIGHBOR_ADVERTISEMENT => 3; # RFC 4861
+use constant RETRANS_TIMER => 1; # seconds, RFC 4861
+
+my ($opt_tgt, $opt_dest, $opt_iface, $opt_mac, $opt_delay, $opt_count,
 	$opt_router, $opt_no_router, $opt_override, $opt_no_override,
 	$opt_verbose, $opt_help);
 $opt_dest = 'ff20::1'; # All nodes mcast group
@@ -25,9 +28,10 @@ Sends ICMPv6 NA message(s) to given destination.
 
 valid options are:
  -d --to=ip6addr      destination IPv6 address (default: $opt_dest)
+ -i --iface=ifname    interface name to send packets (only for mcast destination)
  -m --mac=l2addr      send given MAC in target link-layer address option
  -c --count=N         number of retransmissions (infinite: 0; default: $opt_count)
- -w --wait=N         sleep N seconds between retransmissions
+ -d --delay=N         sleep N seconds between retransmissions
  -r --router          set Router flag
  -R  --norouter       unset Router flag (default)
  -o --override        set Override flag (default)
@@ -40,9 +44,10 @@ END
 Getopt::Long::Configure ("no_ignore_case", "bundling");
 GetOptions (
 	"d|to:s" => \$opt_dest,
+	"i|iface:s" => \$opt_iface,
 	"m|mac:s" => \$opt_mac,
 	"c|count:i" => \$opt_count,
-	"w|wait:i" => \$opt_delay,
+	"d|delay:i" => \$opt_delay,
 	"r|router" => \$opt_router,
 	"R|norouter" => \$opt_no_router,
 	"o|override" => \$opt_override,
@@ -70,13 +75,23 @@ if (@ARGV) {
 my $R_flag = $opt_router && !$opt_no_router ? '1' : '0';
 my $O_flag = $opt_override || !$opt_no_override ? '1' : '0';
 
-my $target_address = inet_pton AF_INET6, $opt_tgt;
-defined $target_address or die "inet_pton(\"$opt_tgt\"): $!";
-my $src = pack_sockaddr_in6 0, $target_address;
+my $if_index;
+if (defined $opt_iface) { $if_index = fbsd_get_ifindex ($opt_iface) }
 
-my $dest_address = inet_pton AF_INET6, $opt_dest;
-defined $dest_address or die "inet_pton(\"$opt_dest\"): $!";
-my $dst = pack_sockaddr_in6 0, $dest_address;
+my ($tgt_address, $tgt_scope) = inet_pton (AF_INET6, $opt_tgt);
+defined $tgt_address or die "inet_pton(\"$opt_tgt\"): $!";
+$tgt_scope = $if_index if (defined $if_index and is_link_local ($tgt_address) and ! defined $tgt_scope);
+my $src = pack_sockaddr_in6 (0, $tgt_address, $tgt_scope);
+
+my ($dst_address, $dst_scope) = inet_pton (AF_INET6, $opt_dest);
+defined $dst_address or die "inet_pton(\"$opt_dest\"): $!";
+$dst_scope = $if_index if (defined $if_index and is_link_local ($dst_address) and ! defined $dst_scope);
+my $dst = pack_sockaddr_in6 (0, $dst_address, $dst_scope);
+
+unless (defined $if_index) {
+	if (defined $dst_scope) { $if_index = $dst_scope }
+	elsif (defined $tgt_scope) { $if_index = $tgt_scope }
+}
 
 my $packet = pack ('CCnB8CCCa16',
 	136, # type
@@ -84,7 +99,7 @@ my $packet = pack ('CCnB8CCCa16',
 	0,   # checksum
 	"${R_flag}0${O_flag}00000", # flags
 	0, 0, 0, # reservation
-	$target_address
+	$tgt_address
 );
 
 # add Target Link-layer Address option
@@ -98,6 +113,10 @@ if (defined $opt_mac) {
 
 socket ICMP6, AF_INET6, SOCK_RAW, IPPROTO_ICMPV6 or die "socket(SOCK_RAW): $!";
 setsockopt ICMP6, IPPROTO_ICMPV6, ICMP6_FILTER, pack ('N8', (0) x 8) or die "setsockopt(ICMPV6_FILTER): $!";
+setsockopt ICMP6, SOL_SOCKET, SO_DONTROUTE, 1 or die "setsockopt(SO_DONTROUTE): $!";
+if (defined $if_index) {
+	setsockopt ICMP6, IPPROTO_IPV6, IPV6_MULTICAST_IF, $if_index or die "setsockopt(IPV6_MULTICAST_IF): $!";
+}
 bind ICMP6, $src or die "bind: $!";
 
 my $i = 0;
@@ -114,4 +133,63 @@ while (!$opt_count || ++$i <= $opt_count) {
 		$flags = " ($flags)" if $flags ne '';
 		print "$opt_tgt > $opt_dest: ICMP6, neighbor advertisement$flags, tgt is $opt_tgt, length $n_sent\n";
 	}
+}
+
+sub is_link_local {
+	my $ip_bin = shift;
+	return 0xfe80 == (0xffc0 & unpack ('n', substr $ip_bin, 0, 2));
+}
+
+sub inet_pton {
+	my ($af, $ip) = @_;
+	return unless $af == AF_INET6;
+	my $scope;
+	$ip =~ s/%(\S+)$//;
+	defined $1 and $scope = fbsd_get_ifindex ($1);
+
+	$ip =~ s/^::|::$/:/g;
+	my @wazzas = split /:/, $ip, 8;
+	my @chunks;
+	my $seen_empty = 0;
+	for (@wazzas) {
+		if ('' eq $_) {
+			return if $seen_empty;
+			$seen_empty = 1;
+			for (0 .. (8 - @wazzas)) {
+				push @chunks, '0000';
+			}
+		}
+		else {
+			my $chunk = ('0' x (4 - length $_)) . $_;
+			return unless $chunk =~ /^[0-9A-Fa-f]{4}$/;
+			push @chunks, $chunk;
+		}
+	}
+	return unless @chunks == 8;
+	my $bin_ip = pack ('H4' x 8, @chunks);
+	return wantarray ? ($bin_ip, $scope) : $bin_ip;
+}
+
+sub pack_sockaddr_in6 {
+	my ($port, $ip, $scope) = @_;
+	return pack ('CCnNa16V',
+		28, # length
+		AF_INET6, # family
+		$port,
+		0, # flow_info
+		$ip,
+		defined $scope ? $scope : 0,
+	);
+}
+
+sub fbsd_get_ifindex {
+	my $if_name = shift;
+	my $out = `netstat -I "$if_name"`;
+	$? == 0 or die sprintf ("netstat exit code = ", $? >> 8);
+	for (split /\n/, $out) {
+		if (/^\S+\s+\S+\s+<Link#(\d+)>/) {
+			return $1 + 0;
+		}
+	}
+	die "unknown iface $if_name";
 }
