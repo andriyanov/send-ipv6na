@@ -10,6 +10,8 @@ use constant IPPROTO_IPV6 => 41; # FreeBSD, /usr/src/sys/netinet/in.h
 use constant IPPROTO_ICMPV6 => 58; # FreeBSD, /usr/src/sys/netinet/in.h
 use constant ICMP6_FILTER => 18; # FreeBSD, /usr/src/sys/netinet6/in6.h
 use constant IPV6_MULTICAST_IF => 9; # FreeBSD, /usr/src/sys/netinet6/in6.h
+use constant IPV6_MULTICAST_HOPS => 10; # FreeBSD, /usr/src/sys/netinet6/in6.h
+use constant IPV6_UNICAST_HOPS => 4; # FreeBSD, /usr/src/sys/netinet6/in6.h
 
 use constant MAX_NEIGHBOR_ADVERTISEMENT => 3; # RFC 4861
 use constant RETRANS_TIMER => 1; # seconds, RFC 4861
@@ -31,7 +33,7 @@ valid options are:
  -i --iface=ifname    interface name to send packets (only for mcast destination)
  -m --mac=l2addr      send given MAC in target link-layer address option
  -c --count=N         number of retransmissions (infinite: 0; default: $opt_count)
- -d --delay=N         sleep N seconds between retransmissions
+ -w --wait=N         sleep N seconds between retransmissions
  -r --router          set Router flag
  -R  --norouter       unset Router flag (default)
  -o --override        set Override flag (default)
